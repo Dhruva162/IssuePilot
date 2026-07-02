@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+data/
+tasks/
+workspaces/
+frontend/node_modules/
+frontend/dist/
+coverage.xml
+.coverage
+
