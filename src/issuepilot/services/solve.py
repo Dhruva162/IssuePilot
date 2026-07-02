@@ -6,12 +6,17 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from issuepilot.models import IssueRecord, IssueStatus
 from issuepilot.schemas import SolveResult
 
 logger = logging.getLogger(__name__)
+
+CODEX_ENV_VAR = "ISSUEPILOT_CODEX_CLI"
 
 
 class SolveService:
@@ -22,18 +27,25 @@ class SolveService:
         prompt_path = workspace / ".issuepilot-prompt.md"
         if not workspace.is_dir() or not prompt_path.is_file():
             raise ValueError("Prepared workspace is missing. Run the overnight scan again.")
-        prompt = prompt_path.read_text(encoding="utf-8")
-        codex = shutil.which("codex")
+        prompt = self._prompt_instruction(prompt_path)
+        codex = self._find_codex_cli()
         if codex:
-            self._launch_codex(codex, workspace, prompt)
-            issue.status = IssueStatus.SOLVING.value
-            return SolveResult(
-                launched=True,
-                method="codex-cli",
-                message="Codex launched with the prepared workspace and prompt.",
-                workspace_path=str(workspace),
-                prompt_path=str(prompt_path),
-            )
+            try:
+                self._launch_codex(codex, workspace, prompt)
+                issue.status = IssueStatus.SOLVING.value
+                return SolveResult(
+                    launched=True,
+                    method="codex-cli",
+                    message="Codex launched with the prepared workspace and generated prompt.",
+                    workspace_path=str(workspace),
+                    prompt_path=str(prompt_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Codex CLI was detected at %s but could not be launched: %s",
+                    codex,
+                    exc,
+                )
 
         launcher = self._write_launcher(workspace, prompt_path)
         self._open_workspace(workspace)
@@ -50,11 +62,71 @@ class SolveService:
 
     @staticmethod
     def is_codex_available() -> bool:
-        return shutil.which("codex") is not None
+        return SolveService._find_codex_cli() is not None
+
+    @staticmethod
+    def _find_codex_cli() -> str | None:
+        load_dotenv()
+        configured = os.getenv(CODEX_ENV_VAR)
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if configured_path.is_file():
+                return str(configured_path)
+            logger.warning("%s points to a missing Codex executable: %s", CODEX_ENV_VAR, configured)
+
+        for executable in ("codex", "codex.cmd", "codex.exe", "codex.bat"):
+            resolved = shutil.which(executable)
+            if resolved:
+                return resolved
+
+        for candidate in SolveService._windows_codex_candidates():
+            if candidate.is_file():
+                return str(candidate)
+        return None
+
+    @staticmethod
+    def _windows_codex_candidates() -> Iterable[Path]:
+        if os.name != "nt":
+            return ()
+
+        candidates: list[Path] = []
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            npm_bin = Path(appdata) / "npm"
+            candidates.extend(
+                [
+                    npm_bin / "codex.cmd",
+                    npm_bin / "codex.exe",
+                    npm_bin / "codex.bat",
+                ]
+            )
+        local_appdata = os.getenv("LOCALAPPDATA")
+        if local_appdata:
+            candidates.extend(
+                [
+                    Path(local_appdata) / "Programs" / "Codex" / "codex.exe",
+                    Path(local_appdata) / "Microsoft" / "WinGet" / "Links" / "codex.exe",
+                    Path(local_appdata) / "Microsoft" / "WinGet" / "Links" / "codex.cmd",
+                ]
+            )
+        return candidates
+
+    @staticmethod
+    def _prompt_instruction(prompt_path: Path) -> str:
+        return f"Read and follow the prepared IssuePilot prompt at {prompt_path}"
 
     @staticmethod
     def _launch_codex(codex: str, workspace: Path, prompt: str) -> None:
-        command = [codex, "-C", str(workspace), "--sandbox", "workspace-write", prompt]
+        command = [
+            codex,
+            "-C",
+            str(workspace),
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "on-request",
+            prompt,
+        ]
         kwargs: dict[str, object] = {"cwd": workspace}
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
@@ -88,8 +160,8 @@ class SolveService:
                 "where codex >nul 2>nul || (echo Codex CLI is not installed or not on PATH. "
                 "& pause & exit /b 1)\r\n"
                 f'cd /d "{workspace}"\r\n'
-                f'codex -C "{workspace}" --sandbox workspace-write '
-                f'"Read and follow the prepared prompt at {prompt_path}"\r\n',
+                f'codex -C "{workspace}" --sandbox workspace-write --ask-for-approval on-request '
+                f'"{SolveService._prompt_instruction(prompt_path)}"\r\n',
                 encoding="utf-8",
             )
         else:
@@ -98,7 +170,8 @@ class SolveService:
                 "#!/usr/bin/env sh\nset -eu\n"
                 f"cd {shlex.quote(str(workspace))}\n"
                 f"codex -C {shlex.quote(str(workspace))} --sandbox workspace-write "
-                f"{shlex.quote(f'Read and follow the prepared prompt at {prompt_path}')}\n",
+                "--ask-for-approval on-request "
+                f"{shlex.quote(SolveService._prompt_instruction(prompt_path))}\n",
                 encoding="utf-8",
             )
             launcher.chmod(0o755)

@@ -117,16 +117,17 @@ ISSUEPILOT_GITHUB_QUERY=is:issue is:open label:"help wanted" language:python arc
 
 ## Codex handoff
 
-Solve detects `codex` on `PATH`. When available it starts the stable interactive CLI with:
+Solve detects `codex` on `PATH`, common Windows install locations, or the optional
+`ISSUEPILOT_CODEX_CLI` override. When available it starts the stable interactive CLI with:
 
 - the selected repository as the working directory;
 - `workspace-write` sandbox permissions;
-- the generated `.issuepilot-prompt.md` as the initial prompt.
+- an initial instruction to read the generated `.issuepilot-prompt.md`.
 
 That is a genuine automatic start; it does not call a paid LLM API from IssuePilot. Codex
 itself may require the user to be logged in and entitled to use it.
 
-If `codex` is absent, IssuePilot opens the prepared repository and creates
+If Codex CLI is unavailable or cannot be launched, IssuePilot opens the prepared repository and creates
 `Start IssuePilot Codex.cmd` (Windows) or `start-issuepilot-codex.sh` (macOS/Linux). This is
 truthfully reported in the dashboard. After Codex CLI is installed and authenticated, that
 file is the remaining manual start action.
@@ -204,4 +205,3 @@ IssuePilot never sends repository contents to an IssuePilot service and stores a
 locally. It does not execute cloned code during scanning. Codex is launched with
 `workspace-write`, not unrestricted system access. Tokens belong only in `.env`, which is
 gitignored.
-
